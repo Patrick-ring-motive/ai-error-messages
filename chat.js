@@ -91,8 +91,7 @@ const merge = (base, over) => {
 };
 
 const hasContent = (d) =>
-  typeof d?.choices?.[0]?.message?.content === "string" &&
-  d.choices[0].message.content.length > 0;
+  !!d?.choices?.[0]?.message?.content?.length > 0;
 
 const fetchCompletion = async (content, model) => {
   try {
