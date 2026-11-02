@@ -40,7 +40,8 @@ const unescapeFlat = (() => {
   };
 })();
 
-const completion = (model, content, usage = {}) => {
+const completion = (model, content, usage) => {
+  usage = Object(usage);
   content = unescapeFlat(String(content));
   return ({
     id: `chatcmpl-${randomId()}`,
