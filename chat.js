@@ -1,7 +1,7 @@
-const randomId = ()=>{
-  try{
+const randomId = () => {
+  try {
     return crypto.randomUUID();
-  }catch{
+  } catch {
     return String(Math.random());
   }
 };
@@ -40,28 +40,30 @@ const unescapeFlat = (() => {
   };
 })();
 
-
-const completion = (model, content, usage = {}) =>{
+const completion = (model, content, usage = {}) => {
   content = unescapeFlat(String(content));
   return ({
-  id: `chatcmpl-${randomId()}`,
-  object: "chat.completion",
-  created: Math.floor(Date.now() / 1000),
-  model,
-  choices: [{
-    index: 0,
-    message: { role: "assistant", content, refusal: null },
-    logprobs: null,
-    finish_reason: "stop",
-  }],
-  usage: {
-    prompt_tokens: usage.prompt ?? 0,
-    completion_tokens: usage.completion ?? 0,
-    total_tokens: (usage.prompt ?? 0) + (usage.completion ?? 0),
-  },
-})
+    id: `chatcmpl-${randomId()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content,
+        refusal: null
+      },
+      logprobs: null,
+      finish_reason: "stop",
+    }],
+    usage: {
+      prompt_tokens: usage.prompt ?? 0,
+      completion_tokens: usage.completion ?? 0,
+      total_tokens: (usage.prompt ?? 0) + (usage.completion ?? 0),
+    },
+  })
 };
-
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -70,11 +72,15 @@ const merge = (base, over) => {
   if (over == null || over === "") return base;
   if (Array.isArray(base) && Array.isArray(over)) {
     const out = [...base];
-    over.forEach((v, i) => { out[i] = i in base ? merge(base[i], v) : v; });
+    over.forEach((v, i) => {
+      out[i] = i in base ? merge(base[i], v) : v;
+    });
     return out;
   }
   if (isObj(base) && isObj(over)) {
-    const out = { ...base };
+    const out = {
+      ...base
+    };
     for (const k of Object.keys(over)) {
       out[k] = k in base ? merge(base[k], over[k]) : over[k];
     }
@@ -97,14 +103,19 @@ const fetchCompletion = async (content, model) => {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content }],
+        messages: [{
+          role: "user",
+          content
+        }],
       }),
     });
 
     const raw = await res.text();
 
     let data;
-    try { data = JSON.parse(raw); } catch {}
+    try {
+      data = JSON.parse(raw);
+    } catch {}
 
     if (res.ok && hasContent(data)) return data;
 
@@ -114,7 +125,6 @@ const fetchCompletion = async (content, model) => {
     return completion(model, String(e));
   }
 };
-
 
 ////stream
 
@@ -163,7 +173,12 @@ const conformSSE = (model) => {
     object: "chat.completion.chunk",
     created: state.created,
     model: state.model,
-    choices: [{ index: 0, delta, logprobs: null, finish_reason: finishReason }],
+    choices: [{
+      index: 0,
+      delta,
+      logprobs: null,
+      finish_reason: finishReason
+    }],
   });
 
   const send = (controller, chunk) =>
@@ -171,13 +186,18 @@ const conformSSE = (model) => {
 
   const emitText = (controller, value, extra = {}) => {
     state.locked = true;
-    const delta = { content: unescapeFlat(value) };
+    const delta = {
+      content: unescapeFlat(value)
+    };
     if (!state.roleSent) {
       delta.role = "assistant";
       state.roleSent = true;
     }
     state.contentSeen = true;
-    send(controller, { ...extra, ...baseChunk(delta) });
+    send(controller, {
+      ...extra,
+      ...baseChunk(delta)
+    });
   };
 
   const normalize = (controller, upstream) => {
@@ -195,7 +215,9 @@ const conformSSE = (model) => {
       model: state.model,
     };
     if (upstream.choices.length) {
-      const choice = { ...upstream.choices[0] };
+      const choice = {
+        ...upstream.choices[0]
+      };
       const delta = {
         ...(isObj(choice.delta) ? choice.delta : isObj(choice.message) ? choice.message : {}),
       };
@@ -248,7 +270,9 @@ const conformSSE = (model) => {
 
   return new TransformStream({
     transform(chunk, controller) {
-      feed(controller, decoder.decode(chunk, { stream: true }));
+      feed(controller, decoder.decode(chunk, {
+        stream: true
+      }));
     },
     flush(controller) {
       feed(controller, decoder.decode());
@@ -266,7 +290,10 @@ const conformSSE = (model) => {
 const streamCompletion = async (content, model) => {
   const respond = (body) =>
     new Response(body, {
-      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache"
+      },
     });
   const failed = (message) =>
     respond(new Response(asSSE(message)).body.pipeThrough(conformSSE(model)));
@@ -277,7 +304,14 @@ const streamCompletion = async (content, model) => {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({ model, stream: true, messages: [{ role: "user", content }] }),
+      body: JSON.stringify({
+        model,
+        stream: true,
+        messages: [{
+          role: "user",
+          content
+        }]
+      }),
     });
     if (!res.ok || !res.body) return failed(`${res.status}: ${await res.text()}`);
     return respond(res.body.pipeThrough(conformSSE(model)));
