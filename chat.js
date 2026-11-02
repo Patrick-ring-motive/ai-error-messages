@@ -106,3 +106,174 @@ const fetchCompletion = async (content, model) => {
     return completion(model, String(e));
   }
 };
+
+
+////stream
+
+const NL = String.fromCharCode(10);
+const CR = String.fromCharCode(13);
+const encoder = new TextEncoder();
+const frame = (chunk) => encoder.encode("data: " + JSON.stringify(chunk) + NL + NL);
+const DONE = encoder.encode("data: [DONE]" + NL + NL);
+const asSSE = (value) => value.split(NL).map((line) => "data: " + line).join(NL) + NL + NL;
+const FIELD = /^(:|event:|id:|retry:)/;
+
+const payloadOf = (event) => {
+  const lines = event.split(NL);
+  const dataLines = lines.filter((line) => line.startsWith("data:"));
+  if (dataLines.length) {
+    return dataLines.map((line) => line.slice(5).replace(/^ /, "")).join(NL);
+  }
+  return lines.every((line) => line === "" || FIELD.test(line)) ? "" : event;
+};
+
+const usable = (parsed) => {
+  if (!isObj(parsed) || !Array.isArray(parsed.choices)) return false;
+  if (parsed.choices.length === 0) return isObj(parsed.usage);
+  const firstChoice = parsed.choices[0];
+  return isObj(firstChoice) &&
+    (isObj(firstChoice.delta) || isObj(firstChoice.message) || firstChoice.finish_reason != null);
+};
+
+const conformSSE = (model) => {
+  const decoder = new TextDecoder();
+  const state = {
+    id: `chatcmpl-${crypto.randomUUID()}`,
+    model,
+    created: Math.floor(Date.now() / 1000),
+    locked: false,
+    buffer: "",
+    raw: "",
+    roleSent: false,
+    contentSeen: false,
+    doneSeen: false,
+    held: null,
+  };
+
+  const baseChunk = (delta, finishReason = null) => ({
+    id: state.id,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model,
+    choices: [{ index: 0, delta, logprobs: null, finish_reason: finishReason }],
+  });
+
+  const send = (controller, chunk) =>
+    state.held ? state.held.push(chunk) : controller.enqueue(frame(chunk));
+
+  const emitText = (controller, value, extra = {}) => {
+    state.locked = true;
+    const delta = { content: unescapeFlat(value) };
+    if (!state.roleSent) {
+      delta.role = "assistant";
+      state.roleSent = true;
+    }
+    state.contentSeen = true;
+    send(controller, { ...extra, ...baseChunk(delta) });
+  };
+
+  const normalize = (controller, upstream) => {
+    if (!state.locked) {
+      if (typeof upstream.id === "string") state.id = upstream.id;
+      if (typeof upstream.model === "string") state.model = upstream.model;
+      if (Number.isInteger(upstream.created)) state.created = upstream.created;
+      state.locked = true;
+    }
+    const output = {
+      ...upstream,
+      id: state.id,
+      object: "chat.completion.chunk",
+      created: state.created,
+      model: state.model,
+    };
+    if (upstream.choices.length) {
+      const choice = { ...upstream.choices[0] };
+      const delta = {
+        ...(isObj(choice.delta) ? choice.delta : isObj(choice.message) ? choice.message : {}),
+      };
+      delete choice.message;
+      if (delta.role) {
+        state.roleSent = true;
+      } else if (!state.roleSent) {
+        delta.role = "assistant";
+        state.roleSent = true;
+      }
+      if (
+        (typeof delta.content === "string" && delta.content.length) ||
+        delta.tool_calls?.length ||
+        delta.function_call
+      ) {
+        state.contentSeen = true;
+      }
+      choice.index = 0;
+      choice.delta = delta;
+      choice.logprobs ??= null;
+      choice.finish_reason ??= null;
+      output.choices = [choice, ...upstream.choices.slice(1)];
+      if (choice.finish_reason !== null) state.held ??= [];
+    }
+    send(controller, output);
+  };
+
+  const handle = (controller, event) => {
+    const payload = payloadOf(event);
+    if (payload === "") return;
+    if (payload.trim() === "[DONE]") {
+      state.doneSeen = true;
+      return;
+    }
+    if (state.raw.length < 65536) state.raw += payload + NL;
+    let parsed;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {}
+    if (usable(parsed)) normalize(controller, parsed);
+    else emitText(controller, payload, isObj(parsed) ? parsed : {});
+  };
+
+  const feed = (controller, incoming) => {
+    state.buffer += incoming.replaceAll(CR, "");
+    const events = state.buffer.split(NL + NL);
+    state.buffer = events.pop();
+    events.forEach((event) => handle(controller, event));
+  };
+
+  return new TransformStream({
+    transform(chunk, controller) {
+      feed(controller, decoder.decode(chunk, { stream: true }));
+    },
+    flush(controller) {
+      feed(controller, decoder.decode());
+      if (state.buffer.trim()) handle(controller, state.buffer);
+      const held = state.held;
+      state.held = null;
+      if (!state.contentSeen) emitText(controller, state.raw || "[empty stream]");
+      if (held) held.forEach((chunk) => controller.enqueue(frame(chunk)));
+      else controller.enqueue(frame(baseChunk({}, state.doneSeen ? "stop" : "length")));
+      controller.enqueue(DONE);
+    },
+  });
+};
+
+const streamCompletion = async (content, model) => {
+  const respond = (body) =>
+    new Response(body, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    });
+  const failed = (message) =>
+    respond(new Response(asSSE(message)).body.pipeThrough(conformSSE(model)));
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({ model, stream: true, messages: [{ role: "user", content }] }),
+    });
+    if (!res.ok || !res.body) return failed(`${res.status}: ${await res.text()}`);
+    return respond(res.body.pipeThrough(conformSSE(model)));
+  } catch (error) {
+    return failed(String(error));
+  }
+};
