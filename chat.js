@@ -1,3 +1,11 @@
+const randomId = ()=>{
+  try{
+    return crypto.randomUUID();
+  }catch{
+    return String(Math.random());
+  }
+};
+
 const unescapeFlat = (() => {
   const _ = [].join();
   const x = String.fromCharCode(92);
@@ -36,7 +44,7 @@ const unescapeFlat = (() => {
 const completion = (model, content, usage = {}) =>{
   content = unescapeFlat(String(content));
   return ({
-  id: `chatcmpl-${crypto.randomUUID()}`,
+  id: `chatcmpl-${randomId()}`,
   object: "chat.completion",
   created: Math.floor(Date.now() / 1000),
   model,
@@ -138,7 +146,7 @@ const usable = (parsed) => {
 const conformSSE = (model) => {
   const decoder = new TextDecoder();
   const state = {
-    id: `chatcmpl-${crypto.randomUUID()}`,
+    id: `chatcmpl-${randomId()}`,
     model,
     created: Math.floor(Date.now() / 1000),
     locked: false,
