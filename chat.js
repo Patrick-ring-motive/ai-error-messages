@@ -1,3 +1,46 @@
+const completion = (model, content, usage = {}) => ({
+  id: `chatcmpl-${crypto.randomUUID()}`,
+  object: "chat.completion",
+  created: Math.floor(Date.now() / 1000),
+  model,
+  choices: [{
+    index: 0,
+    message: { role: "assistant", content, refusal: null },
+    logprobs: null,
+    finish_reason: "stop",
+  }],
+  usage: {
+    prompt_tokens: usage.prompt ?? 0,
+    completion_tokens: usage.completion ?? 0,
+    total_tokens: (usage.prompt ?? 0) + (usage.completion ?? 0),
+  },
+});
+
+
+const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+// Values from `over` win, except null, undefined, and "" never overwrite `base`.
+const merge = (base, over) => {
+  if (over == null || over === "") return base;
+  if (Array.isArray(base) && Array.isArray(over)) {
+    const out = [...base];
+    over.forEach((v, i) => { out[i] = i in base ? merge(base[i], v) : v; });
+    return out;
+  }
+  if (isObj(base) && isObj(over)) {
+    const out = { ...base };
+    for (const k of Object.keys(over)) {
+      out[k] = k in base ? merge(base[k], over[k]) : over[k];
+    }
+    return out;
+  }
+  return over;
+};
+
+const hasContent = (d) =>
+  typeof d?.choices?.[0]?.message?.content === "string" &&
+  d.choices[0].message.content.length > 0;
+
 const fetchCompletion = async (content, model) => {
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -11,10 +54,16 @@ const fetchCompletion = async (content, model) => {
         messages: [{ role: "user", content }],
       }),
     });
-    if (!res.ok) {
-      return completion(model, `${res.status} ${res.statusText} ${await res.text()}`);
-    }
-    return await res.json();
+
+    const raw = await res.text();
+
+    let data;
+    try { data = JSON.parse(raw); } catch {}
+
+    if (res.ok && hasContent(data)) return data;
+
+    const wrapped = completion(model, res.ok ? raw : `${res.status}: ${raw}`);
+    return isObj(data) ? merge(wrapped, data) : wrapped;
   } catch (e) {
     return completion(model, String(e));
   }
