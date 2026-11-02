@@ -2,6 +2,10 @@ const unescapeFlat = (() => {
   const _ = [].join();
   const x = String.fromCharCode(92);
   const xx = x + x;
+  const hexDigit = "[0-9a-fA-F]";
+  const u4 = new RegExp(xx + "u(" + hexDigit + "{4})", "g");
+  const x2 = new RegExp(xx + "x(" + hexDigit + "{2})", "g");
+  const hex = (_m, h) => String.fromCharCode(parseInt(h, 16));
   const esc = {
     0: String.fromCharCode(0),
     a: String.fromCharCode(7),
@@ -20,12 +24,14 @@ const unescapeFlat = (() => {
     while (txt.includes(xx)) {
       txt = txt.replaceAll(xx, x);
     }
+    txt = txt.replace(u4, hex).replace(x2, hex);
     for (const char in esc) {
       txt = txt.replaceAll(x + char, esc[char]).replaceAll(x + esc[char], esc[char]);
     }
     return txt.replaceAll(x, _);
   };
 })();
+
 
 const completion = (model, content, usage = {}) =>{
   content = unescapeFlat(String(content));
