@@ -24,17 +24,20 @@ const unescapeFlat = (() => {
     f: String.fromCharCode(12),
     r: String.fromCharCode(13)
   };
-  esc[String.fromCharCode(34)] = String.fromCharCode(34);
-  esc[String.fromCharCode(39)] = String.fromCharCode(39);
+  Object.assign(esc, {
+    [String.fromCharCode(34)]: String.fromCharCode(34),
+    [String.fromCharCode(39)]: String.fromCharCode(39)
+  });
   Object.freeze(esc);
+  const escapes = Object.entries(esc);
   return (txt) => {
     txt = String(txt ?? _);
     while (txt.includes(xx)) {
       txt = txt.replaceAll(xx, x);
     }
     txt = txt.replace(u4, hex).replace(x2, hex);
-    for (const char in esc) {
-      txt = txt.replaceAll(x + char, esc[char]).replaceAll(x + esc[char], esc[char]);
+    for (const [char, value] of escapes) {
+      txt = txt.replaceAll(x + char, value).replaceAll(x + value, value);
     }
     return txt.replaceAll(x, _);
   };
@@ -73,9 +76,12 @@ const merge = (base, over) => {
   if (over == null || over === "") return base;
   if (Array.isArray(base) && Array.isArray(over)) {
     const out = [...base];
-    over.forEach((v, i) => {
+    for (const i of Array(over.length).keys()) {
+      // Preserve forEach's behavior of skipping sparse array holes.
+      if (!(i in over)) continue;
+      const v = over[i];
       out[i] = i in base ? merge(base[i], v) : v;
-    });
+    }
     return out;
   }
   if (isObj(base) && isObj(over)) {
@@ -235,8 +241,7 @@ const conformSSE = (model) => {
       ) {
         state.contentSeen = true;
       }
-      choice.index = 0;
-      choice.delta = delta;
+      Object.assign(choice, { index: 0, delta });
       choice.logprobs ??= null;
       choice.finish_reason ??= null;
       output.choices = [choice, ...upstream.choices.slice(1)];
@@ -265,7 +270,9 @@ const conformSSE = (model) => {
     state.buffer += incoming.replaceAll(CR, "");
     const events = state.buffer.split(NL + NL);
     state.buffer = events.pop();
-    events.forEach((event) => handle(controller, event));
+    for (const event of events) {
+      handle(controller, event);
+    }
   };
 
   return new TransformStream({
@@ -280,21 +287,27 @@ const conformSSE = (model) => {
       const held = state.held;
       state.held = null;
       if (!state.contentSeen) emitText(controller, state.raw || "[empty stream]");
-      if (held) held.forEach((chunk) => controller.enqueue(frame(chunk)));
-      else controller.enqueue(frame(baseChunk({}, state.doneSeen ? "stop" : "length")));
+      if (held) {
+        for (const chunk of held) {
+          controller.enqueue(frame(chunk));
+        }
+      } else {
+        controller.enqueue(frame(baseChunk({}, state.doneSeen ? "stop" : "length")));
+      }
       controller.enqueue(DONE);
     },
   });
 };
 
+const respond = (body) =>
+  new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache"
+    },
+  });
+
 const streamCompletion = async (content, model) => {
-  const respond = (body) =>
-    new Response(body, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache"
-      },
-    });
   const failed = (message) =>
     respond(new Response(asSSE(message)).body.pipeThrough(conformSSE(model)));
   try {
