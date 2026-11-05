@@ -241,7 +241,10 @@ const conformSSE = (model) => {
       ) {
         state.contentSeen = true;
       }
-      Object.assign(choice, { index: 0, delta });
+      Object.assign(choice, {
+        index: 0,
+        delta
+      });
       choice.logprobs ??= null;
       choice.finish_reason ??= null;
       output.choices = [choice, ...upstream.choices.slice(1)];
